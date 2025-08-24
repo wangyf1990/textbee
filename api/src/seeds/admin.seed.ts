@@ -21,11 +21,11 @@ export class AdminSeed {
 
   async seed() {
     await this.planSeed.seed();
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@example.com';
+    const adminEmail = process.env.ADMIN_EMAIL;
     let adminUser = await this.usersService.findOne({ email: adminEmail });
 
     if (!adminUser) {
-      const adminPassword = process.env.ADMIN_PASSWORD || 'password';
+      const adminPassword = process.env.ADMIN_PASSWORD;
       const adminName = 'Admin';
 
       // Register the user using AuthService.register
