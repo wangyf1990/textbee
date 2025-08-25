@@ -8,3 +8,4 @@ android/app/google-services.json
 web/.env
 api/.env
 .env
+.vscode/
