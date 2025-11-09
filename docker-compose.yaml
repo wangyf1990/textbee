@@ -21,6 +21,10 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    blkio_config:
+      device_read_bps:
+        - path: /dev/vda
+          rate: '100mb'
 
   # MongoDB Express (optional admin UI)
   mongo-express:
