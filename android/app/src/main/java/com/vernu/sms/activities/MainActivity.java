@@ -26,6 +26,7 @@ import com.google.zxing.integration.android.IntentResult;
 import com.vernu.sms.ApiManager;
 import com.vernu.sms.AppConstants;
 import com.vernu.sms.BuildConfig;
+import com.vernu.sms.SMSGatewayApplication;
 import com.vernu.sms.TextBeeUtils;
 import com.vernu.sms.R;
 import com.vernu.sms.dtos.RegisterDeviceInputDTO;
@@ -92,12 +93,17 @@ public class MainActivity extends AppCompatActivity {
             VersionTracker.reportVersionToServer(mContext);
         }
         
-        // Initialize Crashlytics with user information
-        FirebaseCrashlytics crashlytics = FirebaseCrashlytics.getInstance();
-        crashlytics.setCustomKey("device_id", deviceId != null ? deviceId : "not_registered");
-        crashlytics.setCustomKey("device_model", Build.MODEL);
-        crashlytics.setCustomKey("app_version", versionName);
-        crashlytics.setCustomKey("app_version_code", BuildConfig.VERSION_CODE);
+        // Initialize Crashlytics with user information if Firebase is available.
+        try {
+            SMSGatewayApplication.ensureFirebaseInitialized(mContext);
+            FirebaseCrashlytics crashlytics = FirebaseCrashlytics.getInstance();
+            crashlytics.setCustomKey("device_id", deviceId != null ? deviceId : "not_registered");
+            crashlytics.setCustomKey("device_model", Build.MODEL);
+            crashlytics.setCustomKey("app_version", versionName);
+            crashlytics.setCustomKey("app_version_code", BuildConfig.VERSION_CODE);
+        } catch (Exception e) {
+            Log.e(TAG, "Crashlytics initialization failed", e);
+        }
 
         // Start sticky notification service if enabled
         boolean gatewayEnabled = SharedPreferenceHelper.getSharedPreferenceBoolean(mContext, AppConstants.SHARED_PREFS_GATEWAY_ENABLED_KEY, false);
@@ -457,73 +463,85 @@ public class MainActivity extends AppCompatActivity {
         String apiKey = apiKeyEditText.getText().toString();
         String deviceIdInput = deviceIdEditText.getText().toString();
         String deviceIdToUse = !deviceIdInput.isEmpty() ? deviceIdInput : deviceId;
-        
+
         registerDeviceBtn.setEnabled(false);
         registerDeviceBtn.setText("Loading...");
         View view = findViewById(R.id.registerDeviceBtn);
 
-        FirebaseMessaging.getInstance().getToken()
-                .addOnCompleteListener(task -> {
-                    if (!task.isSuccessful()) {
-                        Snackbar.make(view, "Failed to obtain FCM Token :(", Snackbar.LENGTH_LONG).show();
-                        registerDeviceBtn.setEnabled(true);
-                        registerDeviceBtn.setText("Update");
-                        return;
-                    }
-                    String token = task.getResult();
-                    fcmTokenEditText.setText(token);
-
-                    RegisterDeviceInputDTO updateDeviceInput = new RegisterDeviceInputDTO();
-                    updateDeviceInput.setEnabled(true);
-                    updateDeviceInput.setFcmToken(token);
-                    updateDeviceInput.setBrand(Build.BRAND);
-                    updateDeviceInput.setManufacturer(Build.MANUFACTURER);
-                    updateDeviceInput.setModel(Build.MODEL);
-                    updateDeviceInput.setBuildId(Build.ID);
-                    updateDeviceInput.setOs(Build.VERSION.BASE_OS);
-                    updateDeviceInput.setAppVersionCode(BuildConfig.VERSION_CODE);
-                    updateDeviceInput.setAppVersionName(BuildConfig.VERSION_NAME);
-
-                    Call<RegisterDeviceResponseDTO> apiCall = ApiManager.getApiService().updateDevice(deviceIdToUse, apiKey, updateDeviceInput);
-                    apiCall.enqueue(new Callback<RegisterDeviceResponseDTO>() {
-                        @Override
-                        public void onResponse(Call<RegisterDeviceResponseDTO> call, Response<RegisterDeviceResponseDTO> response) {
-                            Log.d(TAG, response.toString());
-                            if (!response.isSuccessful()) {
-                                Snackbar.make(view, response.message().isEmpty() ? "An error occurred :( "+ response.code() : response.message(), Snackbar.LENGTH_LONG).show();
-                                registerDeviceBtn.setEnabled(true);
-                                registerDeviceBtn.setText("Update");
-                                return;
-                            }
-                            SharedPreferenceHelper.setSharedPreferenceString(mContext, AppConstants.SHARED_PREFS_API_KEY_KEY, apiKey);
-                            
-                            // Update deviceId from response if available
-                            if (response.body() != null && response.body().data != null && response.body().data.get("_id") != null) {
-                                deviceId = response.body().data.get("_id").toString();
-                                SharedPreferenceHelper.setSharedPreferenceString(mContext, AppConstants.SHARED_PREFS_DEVICE_ID_KEY, deviceId);
-                                deviceIdTxt.setText(deviceId);
-                                deviceIdEditText.setText(deviceId);
-                            }
-                            
-                            // Update stored version information
-                            VersionTracker.updateStoredVersion(mContext);
-                            
-                            Snackbar.make(view, "Device Updated Successfully :)", Snackbar.LENGTH_LONG).show();
-                            registerDeviceBtn.setEnabled(true);
-                            registerDeviceBtn.setText("Update");
+        try {
+            SMSGatewayApplication.ensureFirebaseInitialized(mContext);
+            FirebaseMessaging.getInstance().getToken()
+                    .addOnCompleteListener(task -> {
+                        String token = null;
+                        if (task.isSuccessful()) {
+                            token = task.getResult();
+                            fcmTokenEditText.setText(token);
+                        } else {
+                            Log.e(TAG, "Failed to obtain FCM token", task.getException());
+                            Snackbar.make(view, "FCM token unavailable; updating device without it", Snackbar.LENGTH_LONG).show();
                         }
-
-                        @Override
-                        public void onFailure(Call<RegisterDeviceResponseDTO> call, Throwable t) {
-                            Snackbar.make(view, "An error occurred :(", Snackbar.LENGTH_LONG).show();
-                            Log.e(TAG, "API_ERROR "+ t.getMessage());
-                            Log.e(TAG, "API_ERROR "+ t.getLocalizedMessage());
-                            TextBeeUtils.logException(t, "Error updating device");
-                            registerDeviceBtn.setEnabled(true);
-                            registerDeviceBtn.setText("Update");
-                        }
+                        submitDeviceUpdate(deviceIdToUse, apiKey, token, view);
                     });
-                });
+        } catch (IllegalStateException e) {
+            Log.e(TAG, "Firebase Messaging unavailable; updating device without FCM token", e);
+            Snackbar.make(view, "FCM unavailable; updating device without it", Snackbar.LENGTH_LONG).show();
+            submitDeviceUpdate(deviceIdToUse, apiKey, null, view);
+        }
+    }
+
+    private void submitDeviceUpdate(String deviceIdToUse, String apiKey, @Nullable String fcmToken, View view) {
+        RegisterDeviceInputDTO updateDeviceInput = new RegisterDeviceInputDTO();
+        updateDeviceInput.setEnabled(true);
+        if (fcmToken != null && !fcmToken.isEmpty()) {
+            updateDeviceInput.setFcmToken(fcmToken);
+        }
+        updateDeviceInput.setBrand(Build.BRAND);
+        updateDeviceInput.setManufacturer(Build.MANUFACTURER);
+        updateDeviceInput.setModel(Build.MODEL);
+        updateDeviceInput.setBuildId(Build.ID);
+        updateDeviceInput.setOs(Build.VERSION.BASE_OS);
+        updateDeviceInput.setAppVersionCode(BuildConfig.VERSION_CODE);
+        updateDeviceInput.setAppVersionName(BuildConfig.VERSION_NAME);
+
+        Call<RegisterDeviceResponseDTO> apiCall = ApiManager.getApiService().updateDevice(deviceIdToUse, apiKey, updateDeviceInput);
+        apiCall.enqueue(new Callback<RegisterDeviceResponseDTO>() {
+            @Override
+            public void onResponse(Call<RegisterDeviceResponseDTO> call, Response<RegisterDeviceResponseDTO> response) {
+                Log.d(TAG, response.toString());
+                if (!response.isSuccessful()) {
+                    Snackbar.make(view, response.message().isEmpty() ? "An error occurred :( "+ response.code() : response.message(), Snackbar.LENGTH_LONG).show();
+                    registerDeviceBtn.setEnabled(true);
+                    registerDeviceBtn.setText("Update");
+                    return;
+                }
+                SharedPreferenceHelper.setSharedPreferenceString(mContext, AppConstants.SHARED_PREFS_API_KEY_KEY, apiKey);
+
+                // Update deviceId from response if available
+                if (response.body() != null && response.body().data != null && response.body().data.get("_id") != null) {
+                    deviceId = response.body().data.get("_id").toString();
+                    SharedPreferenceHelper.setSharedPreferenceString(mContext, AppConstants.SHARED_PREFS_DEVICE_ID_KEY, deviceId);
+                    deviceIdTxt.setText(deviceId);
+                    deviceIdEditText.setText(deviceId);
+                }
+
+                // Update stored version information
+                VersionTracker.updateStoredVersion(mContext);
+
+                Snackbar.make(view, "Device Updated Successfully :)", Snackbar.LENGTH_LONG).show();
+                registerDeviceBtn.setEnabled(true);
+                registerDeviceBtn.setText("Update");
+            }
+
+            @Override
+            public void onFailure(Call<RegisterDeviceResponseDTO> call, Throwable t) {
+                Snackbar.make(view, "An error occurred :(", Snackbar.LENGTH_LONG).show();
+                Log.e(TAG, "API_ERROR "+ t.getMessage());
+                Log.e(TAG, "API_ERROR "+ t.getLocalizedMessage());
+                TextBeeUtils.logException(t, "Error updating device");
+                registerDeviceBtn.setEnabled(true);
+                registerDeviceBtn.setText("Update");
+            }
+        });
     }
 
     private void handleRequestPermissions(View view) {

@@ -11,6 +11,7 @@ import com.google.firebase.messaging.FirebaseMessaging;
 import com.vernu.sms.ApiManager;
 import com.vernu.sms.AppConstants;
 import com.vernu.sms.BuildConfig;
+import com.vernu.sms.SMSGatewayApplication;
 import com.vernu.sms.TextBeeUtils;
 import com.vernu.sms.dtos.RegisterDeviceInputDTO;
 import com.vernu.sms.dtos.RegisterDeviceResponseDTO;
@@ -62,6 +63,7 @@ public class BootCompletedReceiver extends BroadcastReceiver {
      * Updates device information on the server after boot
      */
     private void updateDeviceInfo(Context context, String deviceId, String apiKey) {
+        SMSGatewayApplication.ensureFirebaseInitialized(context);
         FirebaseMessaging.getInstance().getToken()
             .addOnCompleteListener(task -> {
                 if (!task.isSuccessful()) {

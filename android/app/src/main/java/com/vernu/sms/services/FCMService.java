@@ -22,6 +22,9 @@ import com.vernu.sms.models.SMSPayload;
 import com.vernu.sms.dtos.RegisterDeviceInputDTO;
 import com.vernu.sms.dtos.RegisterDeviceResponseDTO;
 import com.vernu.sms.ApiManager;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import retrofit2.Call;
 import retrofit2.Callback;
 import retrofit2.Response;
@@ -30,6 +33,7 @@ public class FCMService extends FirebaseMessagingService {
 
     private static final String TAG = "FirebaseMessagingService";
     private static final String DEFAULT_NOTIFICATION_CHANNEL_ID = "N1";
+    private static final int MAX_PROCESSED_SMS_IDS = 100;
 
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
@@ -42,7 +46,9 @@ public class FCMService extends FirebaseMessagingService {
 
             // Check if message contains a data payload
             if (remoteMessage.getData().size() > 0) {
-                sendSMS(smsPayload);
+                if (shouldProcessSMS(smsPayload)) {
+                    sendSMS(smsPayload);
+                }
             }
 
             // Handle any notification message
@@ -52,6 +58,40 @@ public class FCMService extends FirebaseMessagingService {
         } catch (Exception e) {
             Log.e(TAG, "Error processing FCM message: " + e.getMessage());
         }
+    }
+
+    private boolean shouldProcessSMS(SMSPayload smsPayload) {
+        if (smsPayload == null || smsPayload.getSmsId() == null || smsPayload.getSmsId().isEmpty()) {
+            return true;
+        }
+
+        String smsId = smsPayload.getSmsId();
+        String processedIdsRaw = SharedPreferenceHelper.getSharedPreferenceString(
+                this,
+                AppConstants.SHARED_PREFS_PROCESSED_SMS_IDS_KEY,
+                ""
+        );
+        List<String> processedIds = new ArrayList<>();
+        if (!processedIdsRaw.isEmpty()) {
+            processedIds.addAll(Arrays.asList(processedIdsRaw.split(",")));
+        }
+
+        if (processedIds.contains(smsId)) {
+            Log.w(TAG, "Ignoring duplicate FCM SMS payload - ID: " + smsId);
+            return false;
+        }
+
+        processedIds.add(smsId);
+        while (processedIds.size() > MAX_PROCESSED_SMS_IDS) {
+            processedIds.remove(0);
+        }
+        SharedPreferenceHelper.setSharedPreferenceString(
+                this,
+                AppConstants.SHARED_PREFS_PROCESSED_SMS_IDS_KEY,
+                String.join(",", processedIds)
+        );
+
+        return true;
     }
 
     /**
